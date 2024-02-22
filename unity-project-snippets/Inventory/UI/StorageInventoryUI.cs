@@ -12,6 +12,7 @@ public class StorageInventoryUI : InventoryUI
 
     protected override void Start()
     {
+        playerAreaPanel.gameObject.SetActive(false);
         base.Start();
     }
 
@@ -43,17 +44,19 @@ public class StorageInventoryUI : InventoryUI
     public void UpdatePlayerInventoryData(int itemIndex, Sprite itemImage, int itemQuantity)
     {
         if (PlayerItemUIs.Count > itemIndex)
-            PlayerItemUIs[itemIndex].SetData(itemImage, itemQuantity);
+            PlayerItemUIs[itemIndex].SetData(itemImage != null ? itemImage : emptySlotSprite, itemQuantity);
     }
 
     public override void Show()
     {
+        UIManager.Instance.DisableAllUIs();
         base.Show();
         playerAreaPanel.gameObject.SetActive(true);
     }
 
     public override void Hide()
     {
+        UIManager.Instance.EnableInGameUI();
         playerAreaPanel.gameObject.SetActive(false);
         base.Hide();
     }

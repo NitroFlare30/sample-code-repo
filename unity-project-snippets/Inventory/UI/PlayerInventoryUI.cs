@@ -9,7 +9,7 @@ public class PlayerInventoryUI : InventoryUI
     private Item equippedItem;
     public Item EquippedItem => equippedItem;
 
-
+    public InventoryHotbarUI inventoryHotbarUI;
     [SerializeField]
     private TabElement inventoryTab;
     [SerializeField]
@@ -24,6 +24,14 @@ public class PlayerInventoryUI : InventoryUI
     {
         base.Start();
         inventoryDescription.ResetDescription();
+
+        
+    }
+
+    public override void InitInventoryUI(int inventorySize)
+    {
+        inventoryHotbarUI.InitHotbarUI();
+        base.InitInventoryUI(inventorySize);
     }
 
     public override void Show()
@@ -35,8 +43,20 @@ public class PlayerInventoryUI : InventoryUI
 
     public void UpdateDescription(int itemIndex, Sprite itemImage, string name, string description)
     {
-        inventoryDescription.SetDescription(itemImage, name, description);
+        inventoryDescription.SetItemDescription(itemImage, name, description);
         DeselectAllItems();
         ItemUIs[itemIndex].Select();
+    }
+
+    public override void UpdateData(int itemIndex, Sprite itemImage, int itemQuantity)
+    {
+        base.UpdateData(itemIndex, itemImage, itemQuantity);
+        if (itemIndex < 8)
+        {
+            if (itemImage != null)
+                inventoryHotbarUI.UpdateData(itemIndex, itemImage, itemQuantity);
+            else
+                inventoryHotbarUI.UpdateData(itemIndex, emptySlotSprite, itemQuantity);
+        }
     }
 }

@@ -60,7 +60,7 @@ public class InventoryController : MonoBehaviour
     {
         foreach (var item in inventoryData.GetCurrentInventoryState())
         {
-            InventoryUI.UpdateData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
+            InventoryUI.UpdateData(item.Key, item.Value.item != null ? item.Value.item.GameSprite : null, item.Value.quantity);
         }
     }
 
@@ -69,7 +69,7 @@ public class InventoryController : MonoBehaviour
         InventoryUI.ResetAllItems();
         foreach (var item in inventoryState)
         {
-            InventoryUI.UpdateData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
+            InventoryUI.UpdateData(item.Key, item.Value.item != null ? item.Value.item.GameSprite : null, item.Value.quantity);
         }
     }
 }

@@ -1,224 +1,63 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using TMPro;
+using UnityEngine.AddressableAssets;
 
 public class QuestManager : MonoBehaviour
 {
-    public static QuestManager instance;
-    public Dictionary<string, Quest> unactivatedQuests = new Dictionary<string, Quest>();
-    public Dictionary<string, Quest> availableQuests = new Dictionary<string, Quest>();
-    public Dictionary<string, Quest> finishedQuests = new Dictionary<string, Quest>();
 
-    public GameObject questList;
-    public List<GameObject> questUIHolder = new List<GameObject>();
+    public static QuestManager Instance;
+    public PinnedQuestUI questUI;
 
-    public List<QuestData> questData = new List<QuestData>();
+    private List<Quest> allQuests;
 
-    public Quest mainStoryline;
-    public Quest pinnedQuest;
-
-    public bool skipIntro = false;
+    private List<Quest> dormantQuests = new();
+    private List<Quest> activeQuests = new();
+    private List<Quest> completeQuests = new();
 
     [SerializeField]
-    private GameObject _pinnedQuestUI;
+    private Quest initialQuest;
 
     private void Awake()
     {
-        if (instance != null && instance != this)
-            Destroy(gameObject);
+        if (Instance != null && Instance != this)
+            Destroy(this);
         else
-            instance = this;
+            Instance = this;
+
+
+
+        GetComponentInParent<ManagerInitializer>().InitGameManagers += Init;
     }
 
-    // Start is called before the first frame update
-    void Start()
+    private void Init()
     {
-        StartCoroutine(Waiter());
-    }
+        allQuests = new List<Quest>();
 
-    public void SetQuestState(Quest[] quests)
-    {
-        if (SceneController.instance.newGame)
-        {
-            foreach (Quest quest in quests)
-            {
-                quest.currentStep = -1;
-                quest.isActive = false;
-                quest.isFinished = false;
-            }
-        }
-        else
-        {
-            for (int i = 0; i < quests.Length; i++)
-            {
-                quests[i].currentStep = (short)questData[i].step;
-                quests[i].isActive = questData[i].active;
-                quests[i].isFinished = questData[i].finished;
-                if(quests[i].isActive)
-                {
-                    if(pinnedQuest == null)
-                    {
-                        pinnedQuest = quests[i];
-                        SetPinnedQuest(quests[i]);
-                    }
-                    quests[i].checkpoints[quests[i].currentStep].Init();
-                    quests[i].SetQuestUI();
-                    questUIHolder.Add(quests[i].questUIObject);
-                }
-            }
-        }
-        
-    }
+        Addressables.LoadAssetsAsync<Quest>("Quest", quest => allQuests.Add(quest));
 
-    public IEnumerator Waiter()
-    {
-        //CutsceneManager.instance.nonspeechUI.SetActive(false);
-        yield return new WaitForSeconds(0.1f);
-
-        
-        unactivatedQuests = FindAllQuests();
-        if (!skipIntro)
-        {
-            // MOVE TO SLEEPCHECK eventually
-            InitializeAvailableQuests();
-        }
-
-    }
-
-    public Dictionary<string, Quest> FindAllQuests()
-    {
-        Dictionary<string, Quest> foundQuests = new Dictionary<string, Quest>();
-        Quest[] allQuests = Resources.LoadAll<Quest>("Quests");
-
-        // DEBUG FORCE RESET QUEST
-        SetQuestState(allQuests);
+        dormantQuests = allQuests;
 
         foreach (Quest quest in allQuests)
         {
-            // Place to add qualifiers for quests to load
-            if (!quest.isFinished)
-            {
-                foundQuests.Add(quest.questName, quest);
-                // Debug.Log("Found quest " + quest.questName);
-            }
+            quest.QuestActivated += OnQuestActivated;
+            quest.QuestFinished += OnQuestFinished;
+            quest.Init();
+            //quest.CheckPrerequisites();
         }
-        Debug.Log("Found " + foundQuests.Count + " quests");
-        return foundQuests;
+
+        initialQuest.Awaken();
     }
 
-    public void InitializeAvailableQuests()
+    private void OnQuestActivated(Quest quest)
     {
-        List<string> questsToRemove = new List<string>();
-        foreach (Quest quest in unactivatedQuests.Values)
-        {
-            if (quest.CheckForAvailability())
-            {
-                availableQuests.Add(quest.questName, quest);
-                quest.questUIObject = Instantiate((GameObject)Resources.Load("Prefabs/UI/QuestUIPrefab"), questList.transform);
-                quest.SetQuestUI();
-                questUIHolder.Add(quest.questUIObject);
-                questsToRemove.Add(quest.questName);
-            }
-        }
-
-        foreach (string str in questsToRemove)
-        {
-            unactivatedQuests.Remove(str);
-        }
-
-        foreach (Quest quester in availableQuests.Values)
-        {
-            if (!quester.isFinished && !quester.isActive && quester.questName != "TerisQuest")
-                quester.Init();
-        }
+        dormantQuests.Remove(quest);
+        activeQuests.Add(quest);
     }
 
-    public void QuestFinished(Quest quest)
+    private void OnQuestFinished(Quest quest)
     {
-        availableQuests.Remove(quest.questName);
-        questUIHolder.Remove(quest.questUIObject);
-        Destroy(quest.questUIObject);
-        finishedQuests.Add(quest.questName, quest);
-        InitializeAvailableQuests();
-        if (pinnedQuest == quest)
-            pinnedQuest = null;
-        if (availableQuests.Count != 0)
-            foreach(Quest q in availableQuests.Values)
-                if (q.isActive && !q.isFinished)
-                {
-                    SetPinnedQuest(q);
-                    break;
-                }
-    }
-
-    public Quest GetQuest(string questName)
-    {
-        Quest quest;
-        if (availableQuests.TryGetValue(questName, out quest))
-        {
-            Debug.Log("Quest " + questName + " is available but not yet started");
-            return quest;
-        }
-        else if (unactivatedQuests.TryGetValue(questName, out quest))
-        {
-            Debug.Log("Quest " + questName + " not yet available");
-            return quest;
-        }
-        else if (finishedQuests.TryGetValue(questName, out quest))
-        {
-            Debug.Log("Quest " + questName + " has already been completed");
-            return quest;
-        }
-        Debug.LogWarning("Quest " + questName + " not found!");
-        return null;
-    }
-
-    public void SetPinnedQuest(Quest quest)
-    {
-        if (pinnedQuest != null)
-        {
-            pinnedQuest = quest;
-            _pinnedQuestUI.transform.GetChild(0).GetComponent<TextMeshProUGUI>().text = quest.questName;
-            _pinnedQuestUI.transform.GetChild(1).GetComponent<TextMeshProUGUI>().text = quest.CurrentCheckpoint.description;
-        }
-    }
-
-    public void QuestToDict(List<Quest> avaliable, List<Quest> finished)
-    {
-        foreach(Quest quest in avaliable)
-        {
-            availableQuests[quest.questName] = quest;
-        }
-        foreach (Quest quest in finished)
-        {
-            finishedQuests[quest.questName] = quest;
-        }
-    }
-
-    public List<QuestData> GrabQuestData()
-    {
-        Quest[] quests = Resources.LoadAll<Quest>("Quests");
-        questData.Clear();
-        foreach(Quest quest in quests)
-        {
-            questData.Add(new QuestData(quest.currentStep, quest.isActive, quest.isFinished));
-        }
-        return questData;
-    }
-
-}
-[System.Serializable]
-public class QuestData
-{
-    public int step;
-    public bool active;
-    public bool finished;
-
-    public QuestData(int step, bool active, bool finished)
-    {
-        this.step = step;
-        this.active = active;
-        this.finished = finished;
+        activeQuests.Remove(quest);
+        completeQuests.Add(quest);
     }
 }

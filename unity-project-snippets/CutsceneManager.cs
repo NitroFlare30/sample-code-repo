@@ -1,197 +1,159 @@
+using Ink.Runtime;
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.UI;
+using UnityEngine.Playables;
+using UnityEngine.SceneManagement;
 
 public class CutsceneManager : MonoBehaviour
 {
-    
-    public static CutsceneManager instance;
+    public static CutsceneManager Instance { get; private set; }
 
-    public CanvasGroup canvasGroup;
-    public CutsceneCheckpoint checkpoint;
-
-    private SceneController sceneController;
-
-    private DialogueManager dialogueManager;
-
-    public CutsceneCheckpoint cutsceneCheckpoint;
-    public CutsceneSequence CurrentCutsceneSequence { get; set; }
-
+    public Action CutsceneFinished;
     public bool isInCutscene = false;
-    public bool suspendSceneLoad = false;
 
-    public GameObject UI;
-    public GameObject nonspeechUI;
-    public GameObject introUI;
+    public CutsceneSequence cutsceneSequence;
 
-    private Coroutine activeCoroutine = null;
+    [SerializeField]
+    protected SceneTransition altSceneLoader;
+    [SerializeField]
+    protected CGTransition altCGLoader;
+
+    [SerializeField]
+    protected PlayableDirector director;
+    [SerializeField]
+    protected DialogueManager dialogueManager;
 
 
-    public void SetLoadedCutscene(CutsceneSequence cutscene)
+    
+
+    private void Awake()
     {
-        CurrentCutsceneSequence = cutscene;
+        Instance = this;
     }
 
-    public void BeginCutsceneSequence()
+    // Start is called before the first frame update
+    void Start()
     {
-        if (CurrentCutsceneSequence.CurrentCutscene.sceneName != "CGDisplay")
-            foreach (NPCMovement npc in FindObjectsOfType<NPCMovement>())
-            {
-                npc.isInCutscene = true;
-                npc.GetComponent<SpriteRenderer>().enabled = false;
-            }
-        if (cutsceneCheckpoint.parentQuest.questName != "Town Tour")
-            introUI.SetActive(false);
-        TimeManager.instance.inCutscene = true;
-        ActionHandler.OnSceneEnded -= ResetActors;
-        ActionHandler.OnSceneEnded += LoadProperPositioning;
+        dialogueManager = DialogueManager.Instance;
+    }
+
+    public void SetupCutscene(CutsceneSequence cutscene)
+    {
+        director.playableAsset = null;
+        cutsceneSequence = cutscene;
+        cutsceneSequence.ResetCutscene();
+        
+        Debug.Log("Setting up cutscene: " + cutscene);
+
+        PlayerInputController.Instance.EnableCutsceneControls();
+        UIManager.Instance.DisableAllUIs();
+
+        if (cutsceneSequence == null)
+        {
+            Debug.LogError("Cutscene: " + cutscene + " not found!");
+            return;
+        }
+        
+        LoadSceneAndDialogue();
         ActionHandler.OnNewSceneStart += StartCutscene;
-        nonspeechUI.SetActive(false);
+        return;
     }
 
-    public void StartCutscene(string sceneName)
+    public async void StartCutscene(string _)
     {
+        DateAndTimeManager.Instance.IsTimeTicking = false;
+        PlayerInputController.Instance.CanMove = false;
+        PlayerInputController.Instance.EnableCutsceneControls();
+        PlayerInputController.Instance.GetComponent<BoxCollider2D>().isTrigger = true;
+        UIManager.Instance.EnableDialogueUI();
+
+        if (string.IsNullOrEmpty(cutsceneSequence.CurrentCutscene.inkPathName))
+        {
+            Debug.LogError($"Ink Path required for cutscene: {cutsceneSequence.cutsceneName}, element {cutsceneSequence.cutsceneProgress}");
+        }
+
+        if (cutsceneSequence.CurrentTimeline != null)
+        {
+            dialogueManager.DisableDialogueElements();
+            director.playableAsset = cutsceneSequence.CurrentTimeline;
+            director.Play();
+            Debug.Log("Starting timeline: " + director.playableAsset.name);
+        }
+        else
+        {
+            await dialogueManager.StartQuestDialogue(cutsceneSequence.cutsceneName, cutsceneSequence.CurrentCutscene);
+        }
+
         isInCutscene = true;
-        dialogueManager.EnterDialogueMode(CurrentCutsceneSequence.cutsceneName, CurrentCutsceneSequence.CurrentCutscene.dialogueLines);
     }
 
-    public void BridgeCutscene()
+    public void AdvanceCutscene()
     {
-        //TimeManager.instance.inCutscene = true;
-        if (cutsceneCheckpoint.parentQuest.questName != "Town Tour")
-            introUI.SetActive(false);
-        ActionHandler.OnSceneEnded -= ResetActors;
-        ActionHandler.OnSceneEnded += LoadProperPositioning;
-        ActionHandler.OnNewSceneStart += StartCutscene;
-        nonspeechUI.SetActive(false);
-        LoadProperScenes();
+        if (cutsceneSequence.cutsceneProgress < cutsceneSequence.cutscenes.Count - 1)
+        {
+            cutsceneSequence.cutsceneProgress++;
+            LoadSceneAndDialogue();
+        }
+        else
+            EndCutscene();
     }
 
     public void EndCutscene()
     {
         isInCutscene = false;
-        suspendSceneLoad = false;
-        if (CurrentCutsceneSequence.cutsceneProgress >= CurrentCutsceneSequence.cutscenes.Count - 1)
-        {
-            EndSequence();
-        }
-        else
-        {
-            nonspeechUI.SetActive(false);
-            CurrentCutsceneSequence.cutsceneProgress++;
-            LoadProperScenes();
-        }
-    }
-
-    public void EndSequence(bool force = false)
-    {
+        altSceneLoader.ExternalSceneTransitionCall(cutsceneSequence.kickoutScene, cutsceneSequence.kickoutPosition);
+        cutsceneSequence = null;
         ActionHandler.OnNewSceneStart -= StartCutscene;
-
-        // SkipIntro only
-        if (force)
-        {
-            //ActionHandler.OnSceneEnded += ResetActors;
-            ActionHandler.OnSceneEnded -= LoadProperPositioning;
-            sceneController.LoadScene("PlayerHouse");
-            return;
-        }
-
-        if (CurrentCutsceneSequence.kickoutScene != "")
-        {
-            ActionHandler.OnSceneEnded += ResetActors;
-            ActionHandler.OnSceneEnded -= LoadProperPositioning;
-            sceneController.LoadScene(CurrentCutsceneSequence.kickoutScene);
-            return;
-        }
-        else
-        {
-            ActionHandler.CutsceneConcluded(CurrentCutsceneSequence.cutsceneName);
-            BridgeCutscene();
-        }
-    }
-
-    // Start is called before the first frame update
-    void Awake()
-    {
-        instance = this;
-    }
-
-    private void Start()
-    {
-        sceneController = GameObject.Find("SceneManager").GetComponent<SceneController>();
-        dialogueManager = GetComponent<DialogueManager>();
-    }
-
-    public void LoadProperScenes()
-    {
-        if (CurrentCutsceneSequence.CurrentCutscene.cutsceneType == CutsceneType.CG)
-            sceneController.LoadCG(CurrentCutsceneSequence.CurrentCutscene.cGName, CurrentCutsceneSequence.CurrentCutscene.fadeDuration);
-        else
-            sceneController.LoadScene(CurrentCutsceneSequence.CurrentCutscene.sceneName, CurrentCutsceneSequence.CurrentCutscene.fadeDuration);
-    }
-
-    // For setting initial actor positions
-    public void LoadProperPositioning()
-    {
-        List<StartingLocations> startingLocations = CurrentCutsceneSequence.CurrentCutscene.startingLocations;
-        for (int i = 0; i < startingLocations.Count; i++)
-        {
-            GameObject currentChar = GameObject.Find(startingLocations[i].character);
-            NPCMovement npc = currentChar.GetComponent<NPCMovement>();
-            if (npc)
-            {
-                npc.GetComponent<SpriteRenderer>().enabled = true;
-                npc.isInCutscene = true;
-            }
-            currentChar.transform.position = startingLocations[i].location;
-            currentChar.GetComponent<Animator>().SetFloat("LastMoveX", startingLocations[i].direction.x);
-            currentChar.GetComponent<Animator>().SetFloat("LastMoveY", startingLocations[i].direction.y);
-        }
-    }
-
-    public void ResetActors()
-    {
-        Debug.Log("Resetting Actors");
-        UI.SetActive(true);
-        nonspeechUI.SetActive(true);
+        PlayerInputController.Instance.EnableInGameControls();
         PlayerInputController.Instance.CanMove = true;
-        ActionHandler.CutsceneConcluded(CurrentCutsceneSequence.cutsceneName);
-        cutsceneCheckpoint.Complete();
-        foreach (NPCMovement npc in FindObjectsOfType<NPCMovement>())
-        {
-            npc.isInCutscene = false;
-            npc.GetComponent<SpriteRenderer>().enabled = false;
-            npc.gameObject.transform.position = npc.startPosition.position;
-        }
-        TimeManager.instance.inCutscene = false;
-        dialogueManager.SetSpeechPanelActive(false);
-        
+        PlayerInputController.Instance.GetComponent<BoxCollider2D>().isTrigger = false;
+        UIManager.Instance.EnableInGameUI();
+        PlayerInventoryController.Instance.ForceUpdateInventoryUI();
+        DateAndTimeManager.Instance.IsTimeTicking = true;
+        CutsceneFinished?.Invoke();
     }
 
-    public void SkipIntro()
+    public async void ResumeCutsceneAnimation()
     {
-        QuestManager.instance.availableQuests.TryGetValue("Town Tour", out Quest introquest);
-        ActionHandler.OnSceneEnded -= LoadProperPositioning;
-        ActionHandler.OnNewSceneStart -= StartCutscene;
-        introquest.Complete();
-        QuestManager.instance.availableQuests.TryGetValue("Back to Basics", out Quest tutorialquest);
-        EndSequence(true);
-        tutorialquest.CurrentCheckpoint.Complete();
-        foreach (NPCMovement npc in FindObjectsOfType<NPCMovement>())
-        {
-            npc.isInCutscene = false;
-            npc.GetComponent<SpriteRenderer>().enabled = false;
-            npc.gameObject.transform.position = npc.startPosition.position;
-        }
-        TimeManager.instance.inCutscene = false;
+        if (director.state == PlayState.Paused)
+            director.Resume();
+        DialogueManager.Instance.OnCutsceneDialogueFinished -= ResumeCutsceneAnimation;
+
+        // Might break, will reset the lines
+        await DialogueManager.Instance.StartCutsceneDialogue(cutsceneSequence.cutsceneName, cutsceneSequence.CurrentCutscene);
+    }
+
+    // Other reasons to pause?
+    public async void PauseCutsceneAnimation()
+    {
+        Debug.Log("pausing cutscene");
+        dialogueManager.EnableDialogueElements();
+        if (director.state == PlayState.Playing)
+            director.Pause();
+        await dialogueManager.StartCutsceneDialogue(cutsceneSequence.cutsceneName, cutsceneSequence.CurrentCutscene);
+        DialogueManager.Instance.OnCutsceneDialogueFinished += ResumeCutsceneAnimation;
+    }
+
+    protected virtual void LoadSceneAndDialogue()
+    {
+        if (cutsceneSequence.CurrentCutscene.backgroundCG != null)
+            altCGLoader.BeginCGTransition(cutsceneSequence.CurrentCutscene.backgroundCG);
+        else if (!string.IsNullOrEmpty(cutsceneSequence.CurrentCutscene.sceneName))
+            altSceneLoader.ExternalSceneTransitionCall(cutsceneSequence.CurrentCutscene.sceneName, cutsceneSequence.kickoutPosition);
+        else
+            Debug.LogError("Cutscene not setup properly");
+    }
+
+    public void InstantCutsceneFinish()
+    {
+        PlayerInputController.Instance.playerControls.Disable();
         isInCutscene = false;
-        UI.SetActive(true);
-        nonspeechUI.SetActive(true);
-        PlayerInputController.Instance.CanMove = true;
-        dialogueManager.StopAllCoroutines();
-        dialogueManager.SetSpeechPanelActive(false);
-        dialogueManager.SetCharacterPanelActive(false);
-        dialogueManager.ExitDialogueMode();
+        dialogueManager.ExitDialogue();
+        EndCutscene();
+        UIManager.Instance.DisableAllUIs();
     }
+
 }

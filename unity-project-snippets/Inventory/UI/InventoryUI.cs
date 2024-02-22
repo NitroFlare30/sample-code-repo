@@ -2,18 +2,21 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class InventoryUI : MonoBehaviour
 {
     [SerializeField]
     protected InventoryItemUI itemPrefab;
+    [SerializeField]
+    protected Sprite emptySlotSprite;
 
     public RectTransform areaPanel;
 
     [SerializeField]
     protected ItemDragHandler inventoryDragHandler;
 
-    protected List<InventoryItemUI> ItemUIs = new List<InventoryItemUI>();
+    protected List<InventoryItemUI> ItemUIs = new();
 
     protected int draggedItemIndex = -1;
 
@@ -44,7 +47,10 @@ public class InventoryUI : MonoBehaviour
     {
         if (ItemUIs.Count > itemIndex)
         {
-            ItemUIs[itemIndex].SetData(itemImage, itemQuantity);
+            if (itemImage != null)
+                ItemUIs[itemIndex].SetData(itemImage, itemQuantity);
+            else
+                ItemUIs[itemIndex].SetData(emptySlotSprite, itemQuantity);
         }
     }
 
@@ -86,12 +92,14 @@ public class InventoryUI : MonoBehaviour
 
     public virtual void Show()
     {
-        gameObject.SetActive(true);
+        areaPanel.gameObject.SetActive(true);
+        PlayerInputController.Instance.EnableUIControls();
         ResetSelection();
     }
     public virtual void Hide()
     {
-        gameObject.SetActive(false);
+        areaPanel.gameObject.SetActive(false);
+        PlayerInputController.Instance.EnableInGameControls();
         ResetDragHandler();
     }
 
@@ -117,20 +125,5 @@ public class InventoryUI : MonoBehaviour
         {
             item.Deselect();
         }
-    }
-
-    public void RemoveItem(Item item, int quantity = -1)
-    {
-
-    }
-
-    public void AddItem(Item item, int quantity = -1)
-    {
-
-    }
-
-    public bool CheckForItem(Item item, int numReq = -1)
-    {
-        return true;
     }
 }

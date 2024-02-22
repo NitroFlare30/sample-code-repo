@@ -2,12 +2,12 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class StorageInventoryController : InventoryController
+public class StorageInventoryController : InventoryController, IWorldObject
 {
-    private StorageInventoryUI StorageInventoryUI => InventoryUI as StorageInventoryUI;
+    protected StorageInventoryUI StorageInventoryUI => InventoryUI as StorageInventoryUI;
 
     [SerializeField]
-    private Inventory playerInventoryData;
+    protected Inventory playerInventoryData;
 
     protected override void PrepareData()
     {
@@ -27,23 +27,20 @@ public class StorageInventoryController : InventoryController
         StorageInventoryUI.ResetAllItems();
         foreach (var item in inventoryData.GetCurrentInventoryState())
         {
-            InventoryUI.UpdateData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
+            InventoryUI.UpdateData(item.Key, item.Value.item != null ? item.Value.item.GameSprite : null, item.Value.quantity);
         }
         foreach (var item in playerInventoryData.GetCurrentInventoryState())
         {
-            StorageInventoryUI.UpdatePlayerInventoryData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
+            StorageInventoryUI.UpdatePlayerInventoryData(item.Key, item.Value.item != null ? item.Value.item.GameSprite : null, item.Value.quantity);
         }
     }
 
     public override void ForceUpdateInventoryUI()
     {
-        foreach (var item in inventoryData.GetCurrentInventoryState())
-        {
-            InventoryUI.UpdateData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
-        }
+        base.ForceUpdateInventoryUI();
         foreach (var item in playerInventoryData.GetCurrentInventoryState())
         {
-            StorageInventoryUI.UpdatePlayerInventoryData(item.Key, item.Value.item.GameSprite, item.Value.quantity);
+            StorageInventoryUI.UpdatePlayerInventoryData(item.Key, item.Value.item != null ? item.Value.item.GameSprite : null, item.Value.quantity);
         }
     }
 
@@ -71,4 +68,9 @@ public class StorageInventoryController : InventoryController
         }
     }
 
+    public void Interact()
+    {
+        ForceUpdateInventoryUI();
+        StorageInventoryUI.Show();
+    }
 }

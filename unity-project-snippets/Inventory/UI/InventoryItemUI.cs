@@ -46,7 +46,7 @@ public class InventoryItemUI : MonoBehaviour, IPointerClickHandler, IBeginDragHa
     {
         itemImage.gameObject.SetActive(true);
         itemImage.sprite = sprite;
-        quantityText.text = quantity + "";
+        quantityText.text = quantity < 0 ? "" : quantity + "";
         empty = false;
     }
 

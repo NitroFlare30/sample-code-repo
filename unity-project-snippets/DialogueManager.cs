@@ -9,33 +9,30 @@ using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using System.Linq;
 using UnityEngine.EventSystems;
+using System.Threading.Tasks;
 
 public class DialogueManager : MonoBehaviour
 {
     public static DialogueManager Instance { get; private set; }
-    private CharacterManager characterManager;
 
-    public bool isInDialogue = false;
-    public float _textAdditionsPerSecond = 60;
-    [SerializeField]
-    private DialoguePanelElements dialoguePanel;
-
-
-    [Header("Choice UI")]
-    [SerializeField]
-    private GameObject choicePanel;
-    [SerializeField]
-    private List<GameObject> choiceButtons;
-
-    private Story currentStory;
-    private Character currentCharacter;
-    private Coroutine activeTextAnimator;
-    
+    [SerializeField] private DialogueInkInterpretor dialogueInterpretor;
+    [SerializeField] private CharacterManager characterManager;
+    [SerializeField] private DialogueElementsHandler dialogueElementsHandler;
 
     private const string SPEAKER_TAG = "speaker";
     private const string EMOTION_TAG = "emotion";
+    private const string RELATIONSHIP_POINTS_TAG = "relation_pts"; // Ink Format -- #relation_pts:Nikki/5 or #relation_pts:Jet/-5
 
-    
+    public Action<string> OnStandardDialogueFinished;
+    public Action OnCutsceneDialogueFinished;
+    public Action<string> OnQuestCharacterInteract;
+
+    [SerializeField] private Story currentStory;
+    [SerializeField] private Character currentCharacter;
+
+    public bool IsCurrentlyInDialogue => dialogueElementsHandler.DialoguePanel.dialogueUI.activeInHierarchy;
+    public bool IsCurrentlyAnimatingText => dialogueElementsHandler.ActiveTextAnimator != null;
+    public bool IsCurrentlyAwaitingChoice = false;
 
     private void Awake()
     {
@@ -48,182 +45,137 @@ public class DialogueManager : MonoBehaviour
     // Use this for initialization
     void Start()
     {
-        characterManager = GetComponent<CharacterManager>();
-        dialoguePanel.speechPanel.SetActive(false);
-        dialoguePanel.characterPanel.SetActive(false);
-        dialoguePanel.skipIntroPanel.SetActive(false);
-        choicePanel.SetActive(false);
-        //choicePanel.SetActive(false);
-    }
-
-    public Story FindQuestStory(string cutsceneName) => new(Resources.Load<TextAsset>("Dialogues/Quests/" + cutsceneName + "/" + cutsceneName).text);
-
-    // For Monologues
-    public void EnterDialogueMode(Character character)
-    {
-        isInDialogue = true;
-        PlayerInputController.Instance.CanMove = false;
-        currentCharacter = character;
-        currentCharacter.gameObject.GetComponent<NPCMovement>().isTalking = true;
-        if (activeTextAnimator != null && dialoguePanel.speakerText.text != currentStory.currentText)
-        {
-            FinishTextAnimation(currentStory.currentText);
-            return;
-        }
-        if (currentStory == null)
-        {
-            string monologueName = RandomMonologueName(character);
-            currentStory.ResetState();
-            currentStory.ResetCallstack();
-            currentStory.ChoosePathString(monologueName);
-        }
-        if (currentStory.canContinue)
-        {
-            activeTextAnimator = StartCoroutine(AnimateText(currentStory.Continue()));
-            currentCharacter.GetComponent<Animator>().SetFloat("LastMoveX", -1 * PlayerInputController.Instance.moveDirection.x);
-            currentCharacter.GetComponent<Animator>().SetFloat("LastMoveY", -1 * PlayerInputController.Instance.moveDirection.y);
-            currentCharacter.GetComponent<Animator>().SetBool(currentCharacter.characterName + "Moving", false);
-            TimeManager.instance.pauseTime = true;
-            SetDialogueElements(currentStory.currentTags);
-            dialoguePanel.characterPanel.SetActive(true);
-            dialoguePanel.speechPanel.SetActive(true);
-        }
-        else
-            ExitDialogueMode();
-    }
-
-    // For Dialogues/Cutscenes
-    public void EnterDialogueMode(string cutsceneName, string dialogueName)
-    {
-        isInDialogue = true;
-        PlayerInputController.Instance.CanMove = false;
-        if (cutsceneName == "Intro")
-            dialoguePanel.skipIntroPanel.SetActive(true);
-
-        if (activeTextAnimator != null && dialoguePanel.speakerText.text != currentStory.currentText)
-        {
-            FinishTextAnimation(currentStory.currentText);
-            return;
-        }
-        if (dialogueName != "")
-        {
-            currentStory = FindQuestStory(cutsceneName);
-            currentStory.ChoosePathString(dialogueName);
-        }
-        if (currentStory.canContinue)
-        {
-            activeTextAnimator = StartCoroutine(AnimateText(currentStory.Continue()));
-            TimeManager.instance.pauseTime = true;
-            SetDialogueElements(currentStory.currentTags);
-            dialoguePanel.characterPanel.SetActive(true);
-            dialoguePanel.speechPanel.SetActive(true);
-        }
-        else if (currentStory.currentChoices.Count > 0)
-            return;
-        else
-            ExitDialogueMode();
-    }
-
-    public void ExitDialogueMode()
-    {
-        if (currentCharacter != null)
-            currentCharacter.gameObject.GetComponent<NPCMovement>().isTalking = false;
-        currentCharacter = null;
-        activeTextAnimator = null;
-        dialoguePanel.speechPanel.SetActive(false);
-        dialoguePanel.characterPanel.SetActive(false);
-        dialoguePanel.speakerText.text = "";
-        currentStory.ResetCallstack();
-        currentStory.ResetState();
+        dialogueElementsHandler.DeactivateDialogueUI();
         currentStory = null;
-        TimeManager.instance.pauseTime = false;
-        PlayerInputController.Instance.CanMove = true;
-        isInDialogue = false;
-        if (CutsceneManager.instance.isInCutscene)
-            CutsceneManager.instance.EndCutscene();
-        dialoguePanel.skipIntroPanel.SetActive(false);
     }
 
-    private void DisplayChoices()
+    public async Task StartGenericDialogue(string characterName)
     {
-        List<Choice> currentChoices = currentStory.currentChoices;
-        if (currentChoices.Count == 0)
+        currentStory = dialogueInterpretor.GetStory(characterName, Dialogue_Type.Generic);
+        dialogueInterpretor.SetRandomLines(currentStory);
+        await AdvanceDialogue();
+    }
+
+    public async Task StartQuestDialogue(string questName, Cutscene cutscene)
+    {
+        if (currentStory == null)
         {
-            choicePanel.SetActive(false);
+            currentStory = dialogueInterpretor.GetStory(questName, Dialogue_Type.Quest);
+            dialogueInterpretor.SetCutsceneLines(currentStory, cutscene);
+        }
+
+        await AdvanceDialogue();
+    }
+
+    public async Task StartCutsceneDialogue(string questName, Cutscene cutscene)
+    {
+        if (currentStory == null)
+        {
+            currentStory = dialogueInterpretor.GetStory(questName, Dialogue_Type.Cutscene);
+            if (currentStory == null)
+                Debug.LogError($"Couldn't find cutscene story for: {questName}");
+            dialogueInterpretor.SetCutsceneLines(currentStory, cutscene);
+        }
+
+        await AdvanceDialogue();
+    }
+
+    public async Task StartHeartEventDialogue(string characterName, Cutscene cutscene)
+    {
+        if (currentStory == null)
+        {
+            currentStory = dialogueInterpretor.GetHeartEventStory(characterName, RelationshipManager.Instance.GetRelationshipLevel(characterName));
+            if (currentStory == null)
+                Debug.LogError($"Couldn't find cutscene story for: {characterName}, {cutscene.inkPathName}");
+            dialogueInterpretor.SetCutsceneLines(currentStory, cutscene);
+        }
+
+        await AdvanceDialogue();
+    }
+
+    public async Task StartSpecificDialogue(string characterName, string pathName)
+    {
+        currentStory = dialogueInterpretor.GetStory(characterName, Dialogue_Type.Miscellaneous);
+        dialogueInterpretor.SetMiscellaneousLines(currentStory, pathName);
+        await AdvanceDialogue();
+    }
+
+    public async Task AdvanceDialogue()
+    {
+        // Don't allow text advance with pending choice
+        if (IsCurrentlyAwaitingChoice)
+            return;
+
+        // Allow line-skipping
+        if (IsCurrentlyAnimatingText)
+        {
+            dialogueElementsHandler.FinishTextAnimation(currentStory.currentText);
             return;
         }
-        choicePanel.SetActive(true);
-        int index = 0;
-        foreach (Choice choice in currentChoices)
+
+        if (currentStory.canContinue)
         {
-            choiceButtons[index].SetActive(true);
-            choiceButtons[index].GetComponentInChildren<TextMeshProUGUI>().text = choice.text;
-            index++;
+            DateAndTimeManager.Instance.IsTimeTicking = false;
+            string newTextToDisplay = currentStory.Continue();
+            await SetDialogueElements(currentStory.currentTags);
+            dialogueElementsHandler.StartAnimatingText(newTextToDisplay);
+            if (currentStory.currentChoices.Any())
+            {
+                // Enable choice UI
+                dialogueElementsHandler.ActivateChoiceUI();
+                dialogueElementsHandler.DisplayChoices(currentStory.currentChoices.Select(x => x.text).ToList());
+                IsCurrentlyAwaitingChoice = true;
+            }
         }
-        for (int i = index; i < currentChoices.Count; i++) 
-            choiceButtons[i].SetActive(false);
-        //StartCoroutine(SelectFirstChoice());
+        else
+            ExitDialogue();
     }
 
-    private IEnumerator SelectFirstChoice()
+    public void ExitDialogue()
     {
-        EventSystem.current.SetSelectedGameObject(null);
-        yield return new WaitForEndOfFrame();
-        EventSystem.current.SetSelectedGameObject(choiceButtons[0]);
+        ResetInkElements();
+        currentStory = null;
+        currentCharacter = null;
+        DateAndTimeManager.Instance.IsTimeTicking = true;
+        PlayerInputController.Instance.CanMove = true;
+
+        OnCutsceneDialogueFinished?.Invoke();
+
+        PlayerInputController.Instance.EnableInGameControls();
+        dialogueElementsHandler.DeactivateDialogueUI();
+        UIManager.Instance.EnableInGameUI();
+
+        if (dialogueElementsHandler.DialoguePanel.skipIntroPanel != null)
+            Destroy(dialogueElementsHandler.DialoguePanel.skipIntroPanel);
+
+        if (CutsceneManager.Instance.isInCutscene)
+            CutsceneManager.Instance.AdvanceCutscene();
+        
     }
 
-    public void MakeChoice(int choiceIndex)
+    public async Task MakeDialogueChoice(int index)
     {
-        currentStory.ChooseChoiceIndex(choiceIndex);
-        choicePanel.SetActive(false);
-        EnterDialogueMode("","");
+        IsCurrentlyAwaitingChoice = false;
+        dialogueElementsHandler.DeactivateChoiceUI();
+        currentStory.ChooseChoiceIndex(index);
+        await AdvanceDialogue();
     }
 
-    private IEnumerator AnimateText(string text)
+    #region Helper Methods
+    private void ResetInkElements()
     {
-        dialoguePanel.speakerText.text = "";
-        text = text.Replace("*player*", GlobalFunctions.PlayerName).Trim();
-        while (!dialoguePanel.speakerText.text.Equals(text))
-        {
-            dialoguePanel.speakerText.text += text[dialoguePanel.speakerText.text.Length];
-            yield return new WaitForSeconds(1/_textAdditionsPerSecond);
-        }
-        FinishTextAnimation(text);
+        currentStory?.ResetCallstack();
+        currentStory?.ResetState();
+        currentStory = null;
     }
 
-    private void FinishTextAnimation(string text)
-    {
-        text = text.Replace("*player*", GlobalFunctions.PlayerName).Trim();
-        if (activeTextAnimator != null) StopCoroutine(activeTextAnimator);
-        activeTextAnimator = null;
-        dialoguePanel.speakerText.text = text;
-        DisplayChoices();
-    }
+    public void EnableDialogueElements() =>
+        dialogueElementsHandler.ActivateDialogueUI();
 
-    // LATER: ACCOUNT FOR WEATHER, RELATIONS, ETC
-    private string RandomMonologueName(Character character)
-    {
-        currentStory = new(Resources.Load<TextAsset>("Dialogues/" + character.characterName + "/" + character.characterName).text);
-        if (currentStory == null)
-            Debug.LogError(character.characterName + " does not have an associated ink file!");
-        return GetRandomKnotName(currentStory.ToJson());
-    }
+    public void DisableDialogueElements() =>
+        dialogueElementsHandler.DeactivateDialogueUI();
 
-    private static string GetRandomKnotName(string json)
-    {
-        List<string> keyList = new List<string>();
-        JObject storyText = JObject.Parse(json);
-        IList<JToken> results = storyText["root"]?.Children().ToList();
-        if (results != null && results.Count >= 3)
-        {
-            Dictionary<string, object> knotDictionary = JsonConvert.DeserializeObject<Dictionary<string, object>>(results[2].ToString());
-            keyList = new List<string>(knotDictionary.Keys);
-        }
-        var random = new System.Random();
-        return keyList[random.Next(keyList.Count)];
-    }
-
-    private void SetDialogueElements(List<string> tags)
+    private async Task SetDialogueElements(List<string> tags)
     {
         foreach (string tag in tags)
         {
@@ -236,62 +188,41 @@ public class DialogueManager : MonoBehaviour
             switch(tagKey)
             {
                 case SPEAKER_TAG:
+                    string speakerName = "";
                     if (tagValue == "none")
-                    {
-                        dialoguePanel.speakerName.text = "";
-                        GlobalFunctions.DisableAllSiblingsExcept(dialoguePanel.characterPanel);
-                        dialoguePanel.characterPanel.SetActive(false);
-                    }
+                        speakerName = "";
                     else if (tagValue == "*player*")
-                    {
-                        dialoguePanel.speakerName.text = GlobalFunctions.PlayerName;
-                        SetCharacterPanelActive(false);
+                        speakerName = GlobalFunctions.PlayerName;
+                    else { 
+                        speakerName = tagValue;
+                        currentCharacter = CharacterManager.Instance.GetCharacter(speakerName);
                     }
-                    else if (characterManager.GetCharacter(tagValue) == null)
-                        dialoguePanel.speakerName.text = tagValue;
-                    else
-                    {
-                        dialoguePanel.speakerName.text = tagValue;
-                        currentCharacter = characterManager.GetCharacter(tagValue);
-                        currentCharacter.characterPortrait = currentCharacter.characterPortrait != null ? currentCharacter.characterPortrait : Instantiate(Resources.Load<GameObject>("Characters/_Prefabs" + "/" + currentCharacter.characterName + "[Character]"), dialoguePanel.characterPanel.transform);
-                        currentCharacter.characterPortrait.SetActive(true);
-                        Debug.Log(currentCharacter.characterName + ": " + tagValue);
-                        SetPortrait(currentCharacter);
-                    }
+                    await dialogueElementsHandler.SetPortraitComponent(speakerName);
                     break;
+
                 case EMOTION_TAG:
                     if (tagValue != "none")
-                        currentCharacter.SetExpression(tagValue);
+                        await currentCharacter.SetExpression(tagValue);
                     break;
+
+                case RELATIONSHIP_POINTS_TAG:
+                    List<string> relInfo = tagValue.Split('/').ToList();
+                    if (relInfo.Count != 2)
+                    {
+                        Debug.LogError($"Unable to parse relationship pts from dialogue: {relInfo}");
+                        return;
+                    }
+                    string targetCharacter = relInfo[0];
+                    short relPtsToAdd = short.Parse(relInfo[1]);
+                    RelationshipManager.Instance.GetRelation(targetCharacter).AddRelationPoints(relPtsToAdd);
+                    Debug.Log($"Added {relPtsToAdd} pts to {targetCharacter}");
+                    break;
+
                 default:
                     Debug.LogWarning("Tag not recognized: " + tag);
                     break;
             }
         }
     }
-
-    private void SetPortrait(Character character)
-    {
-        GlobalFunctions.DisableAllSiblingsExcept(dialoguePanel.characterPanel, character.characterPortrait);
-        dialoguePanel.characterPanel.SetActive(true);
-        character.CharacterBodyRenderer.gameObject.SetActive(true);
-        character.CharacterExpressionRenderer.gameObject.SetActive(true);
-    }
-
-    public void SetSpeechPanelActive(bool active) => dialoguePanel.speechPanel.SetActive(active);
-    public void SetCharacterPanelActive(bool active) => dialoguePanel.characterPanel.SetActive(active);
-
-    [Serializable]
-    private struct DialoguePanelElements
-    {
-        // Parent Elements
-        public GameObject characterPanel;
-        public GameObject speechPanel;
-        public GameObject skipIntroPanel;
-
-        // Child Elements
-        public TextMeshProUGUI speakerName;
-        public TextMeshProUGUI speakerText;
-    }
-
+    #endregion
 }
